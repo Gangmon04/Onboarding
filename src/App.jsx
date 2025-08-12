@@ -1,36 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, act } from 'react'
 import './App.css'
 import { FUNCTION, MODULE_NAMES, FIELD_NAMES, RELATEDLIST_NAMES } from './config'
+
 import CustomSpecialtyDropdown from './CustomSpecialtyDropdown';
-
-// Utility function to clean and format error messages
-const formatErrorMessage = (error) => {
-  let message = "An unexpected error occurred";
-
-  if (typeof error === 'string') {
-    message = error;
-  } else if (error?.data?.[0]?.message) {
-    message = error.data[0].message;
-  } else if (error?.message) {
-    message = error.message;
-  }
-  // Clean up the message
-  return message
-    .replace(/^API_|^[A-Z_]+:\s*/i, '')
-    .replace(/\.$/, '')
-    .trim()
-    .replace(/^\w/, c => c.toUpperCase());
-};
 import CustomDepartmentDropdown from './CustomDepartmentDropdown';
 import CustomDoctorDropdown from './CustomDoctorDropdown';
-import CustomProductTypeDropdown from './CustomProductTypeDropdown';
 import CustomDurationDropdown from './CustomDurationDropdown';
 
 function App() {
 
   // ===== Refs =====
-  const productTypeDropdownRef = useRef(null);
-  const productTypeInputRef = useRef(null);
+  // const productTypeDropdownRef = useRef(null);
   const doctorDropdownRef = useRef(null);
   const doctorInputRef = useRef(null);
   const specialtyDropdownRef = useRef(null);
@@ -49,10 +29,13 @@ function App() {
   const [isSingleUser, setIsSingleUserState] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isNavigatingBack, setIsNavigatingBack] = useState(false);
+  const [profilesAndRoles, setProfilesAndRoles] = useState({ profiles: [], roles: [] });
+  const [isSavingDoctor, setIsSavingDoctor] = useState(false);
 
   // ===== UI State =====
-  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
-  const [successMessage, setSuccessMessage] = useState('');
+  const [showBanner, setShowBanner] = useState(false);
+  const [bannerMessage, setBannerMessage] = useState('');
+  const [bannerType, setBannerType] = useState('success'); // 'success', 'error', or 'warning'
 
   // ===== Modal States =====
   const [showDoctorsModal, setShowDoctorsModal] = useState(false);
@@ -100,11 +83,8 @@ function App() {
   const [unitPriceError, setUnitPriceError] = useState('');
 
   // ===== Product Type Related State =====
-  const [isProductTypeDropdownOpen, setIsProductTypeDropdownOpen] = useState(false);
-  const [productTypeSearchTerm, setProductTypeSearchTerm] = useState('');
   const [productTypeError, setProductTypeError] = useState('');
   const [selectedProductType, setSelectedProductType] = useState("Fee");
-  const [productTypeOptions, setProductTypeOptions] = useState([]);
 
   // ===== Duration Related State =====
   const [isDurationDropdownOpen, setIsDurationDropdownOpen] = useState(false);
@@ -112,7 +92,6 @@ function App() {
   const [selectedDuration, setSelectedDuration] = useState('');
   const [durationOptions, setDurationOptions] = useState([]);
   const [durationInputError, setDurationInputError] = useState("");
-
 
 
   async function executeCRMFunction(functionName, params) {
@@ -188,34 +167,54 @@ function App() {
     const success = await setIsSingleUser(isChecked);
     if (success) {
       setIsSingleUserState(isChecked);
-      setOnboardingData(prev => {
-        const updated = { ...prev, [MODULE_NAMES.USERS]: isChecked ? true : prev[MODULE_NAMES.USERS] };
-        console.log('onboardingData after checkbox:', updated);
-        return updated;
-      });
+      try {
+        const response = await ZOHO.CRM.API.getAllUsers({ Type: "AllUsers" });
+        console.log("Raw response received in fetchDoctors:", response);
+        let hasActiveUsers = false;
+
+        if (response?.users) {
+          const activeUsers = response.users.filter(user => user.status === 'active' && user.profile && user.profile.name.toLowerCase() === 'doctor');
+          console.log("activeUsers", activeUsers);
+          hasActiveUsers = activeUsers.length > 0;
+        }
+
+        console.log('hasActiveUsers:', hasActiveUsers);
+        const newCompletionStatus = isChecked || hasActiveUsers;
+
+        setOnboardingData(prev => ({
+          ...prev,
+          [MODULE_NAMES.USERS]: newCompletionStatus
+        }));
+
+      } catch (error) {
+        console.error("Error fetching active users:", error);
+
+      }
     } else {
-      // Revert the checkbox state if update fails
       const checkbox = document.getElementById('single-user-checkbox');
       if (checkbox) checkbox.checked = !isChecked;
       console.error("Failed to update single user mode");
     }
   };
-  const SuccessBanner = ({ message, onClose }) => {
-    return (
-      <div className="success-banner" data-testid="success-banner">
-        <span>{message}</span>
-        <button
-          className="close-btn"
-          onClick={onClose}
-          aria-label="Close"
-          data-testid="close-banner"
-        >
-          &times;
-        </button>
-      </div>
-    );
-  };
 
+  // Utility function to clean and format error messages
+  const formatErrorMessage = (error) => {
+    let message = "An unexpected error occurred";
+
+    if (typeof error === 'string') {
+      message = error;
+    } else if (error?.data?.[0]?.message) {
+      message = error.data[0].message;
+    } else if (error?.message) {
+      message = error.message;
+    }
+    // Clean up the message
+    return message
+      .replace(/^API_|^[A-Z_]+:\s*/i, '')
+      .replace(/\.$/, '')
+      .trim()
+      .replace(/^\w/, c => c.toUpperCase());
+  };
   function resetDoctorsModalFields() {
     setDoctorFirstName('');
     setDoctorLastName('');
@@ -227,12 +226,6 @@ function App() {
     setDoctorDepartmentError('');
   }
 
-  useEffect(() => {
-    if (isDoctorDropdownOpen) {
-      console.log('doctorOptions when dropdown opens:', doctorOptions);
-    }
-  }, [isDoctorDropdownOpen, doctorOptions]);
-
   //Fetch Doctors
   const fetchDoctors = async () => {
     try {
@@ -240,6 +233,7 @@ function App() {
       console.log("Raw response received in fetchDoctors:", response);
       if (response && response.users) {
         const activeUsers = response.users.filter(user => user.status === 'active');
+        console.log("activeUsers", activeUsers);
         const transformedUsers = activeUsers.map(user => ({
           id: user.id,
           first_name: user.first_name,
@@ -283,25 +277,6 @@ function App() {
     }
   };
 
-  //Fetaching Produc Type Options
-  const fetchProductTypeOptions = async () => {
-    try {
-      const response = await ZOHO.CRM.META.getFields({ Entity: MODULE_NAMES.PRODUCTS });
-      if (response.fields) {
-        const productTypeField = response.fields.find(f => f.api_name === FIELD_NAMES.PRODUCT_TYPE);
-        if (productTypeField?.pick_list_values) {
-          const options = productTypeField.pick_list_values.map(opt => opt.display_value);
-          setProductTypeOptions(options);
-          return options;
-        }
-      }
-      return [];
-    } catch (err) {
-      console.error("Error fetching product type options:", err);
-      return [];
-    }
-  };
-
   // Fetch department options when component mounts
   const fetchDepartmentOptions = async () => {
     try {
@@ -320,36 +295,41 @@ function App() {
         console.log('Mapped department options:', deptOptions);
         setDepartmentOptions(deptOptions);
       } else {
+
         console.warn('No department picklist values found or empty');
       }
     } catch (error) {
       console.error('Error in DepartmentOptions:', error);
     }
   };
-  // fetchDepartmentOptions();
 
-  const showMessage = (message, duration = 5000) => {
-    setSuccessMessage(message);
-    setShowSuccessBanner(true);
-    setTimeout(() => setShowSuccessBanner(false), duration);
+  const showMessage = (message, options = {}) => {
+    const {
+      type = 'success',
+      duration = type === 'error' || type === 'warning' ? 10000 : 4000
+    } = options;
+
+    setBannerMessage(message);
+    setBannerType(type);
+    setShowBanner(true);
+
+    // Clear any existing timeout
+    if (window.messageTimeout) {
+      clearTimeout(window.messageTimeout);
+    }
+
+    window.messageTimeout = setTimeout(() => {
+      setShowBanner(false);
+    }, duration);
   };
-  const totalSteps = 4;
 
-  useEffect(() => {
-    console.log('State updated:', {
-      currentStep,
-      isNavigatingBack,
-      [MODULE_NAMES.USERS]: !!onboardingData.users,
-      [MODULE_NAMES.SPECIALTY]: !!onboardingData.Specialty,
-      [MODULE_NAMES.DEPARTMENT]: !!onboardingData.Department
-    });
-  }, [currentStep, isNavigatingBack, onboardingData]);
+  // Aliases for convenience
+  const showError = (message, duration) => showMessage(message, { type: 'error', duration });
+  const showWarning = (message, duration) => showMessage(message, { type: 'warning', duration });
+  const totalSteps = 4;
 
   // Handle auto-navigation when a step is completed
   useEffect(() => {
-    console.log('Auto-nav effect running. isNavigatingBack:', isNavigatingBack);
-    console.log('Current step:', currentStep);
-    console.log('onboardingData:', JSON.stringify(onboardingData, null, 2));
 
     // Skip auto-navigation if we're going back
     if (isNavigatingBack) {
@@ -379,7 +359,7 @@ function App() {
     localStorage.setItem('onboardingCurrentStep', currentStep);
   }, [currentStep]);
 
-  const main = (data) => {
+  const main = async (data) => {
     console.log(data);
     setOnboardingData(data);
     const isSingleUserValue = data.SINGLE_USER_ORG === "ON" || data.isSingleUserOrg === true;
@@ -392,23 +372,35 @@ function App() {
     ZOHO.embeddedApp.init();
   }, []);
 
-  // Handle keyboard navigation for form submission
-  // const handleKeyDown = (e) => {
-  //   if (e.key === 'Enter' && showDoctorsModal) {
-  //     e.preventDefault();
-  //     handleSaveDoctor();
-  //   }
-  // };
+  //Fetching Profiles and Roles
+  useEffect(() => {
+    const initializeZoho = async () => {
+      try {
+        await ZOHO.embeddedApp.init();
+        const fetchStaticData = async () => {
+          try {
+            const profileRoleData = await executeCRMFunction(FUNCTION.GET_PROFILESANDROLES, {});
+            const profiles = profileRoleData?.Profiles?.profiles || [];
+            const roles = profileRoleData?.Roles?.roles || [];
+            setProfilesAndRoles({ profiles, roles });
+          } catch (error) {
+            console.error("Error fetching profiles and roles:", error);
+          }
+        };
+        fetchStaticData();
+      } catch (err) {
+        console.error("Error initializing Zoho SDK:", err);
+      }
+    };
+
+    initializeZoho();
+  }, []);
 
   // Handle click outside for dropdown events
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (doctorDropdownRef.current && !doctorDropdownRef.current.contains(event.target)) {
         setIsDoctorDropdownOpen(false);
-      }
-
-      if (productTypeDropdownRef.current && !productTypeDropdownRef.current.contains(event.target)) {
-        setIsProductTypeDropdownOpen(false);
       }
 
       if (specialtyDropdownRef.current && !specialtyDropdownRef.current.contains(event.target)) {
@@ -426,52 +418,32 @@ function App() {
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [doctorDropdownRef, productTypeDropdownRef, specialtyDropdownRef, durationDropdownRef]);
+  }, [doctorDropdownRef, specialtyDropdownRef, durationDropdownRef]);
 
-  // Handle form submission on Enter key press
-  const handleFormKeyDown = (e) => {
-    // Only handle Enter key
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      handleSaveDoctor();
-      return false;
-    }
-  };
 
   //Checking Status of each step
   const isStepCompleted = (step) => {
     if (!onboardingData) return false;
 
     if (step === 1) {
-
-
-      if (isSingleUser) {
-        return true;
-      }
-      if (!onboardingData[MODULE_NAMES.USERS]) return false;
-      const userData = onboardingData[MODULE_NAMES.USERS];
-      const hasDoctorRole = userData.role?.toLowerCase() === 'doctor';
-      const hasDoctorProfile = userData.profile?.toLowerCase() === 'doctor';
-      return hasDoctorRole && hasDoctorProfile;
-    }
-    const stepData = {
-      // 1: !!onboardingData[MODULE_NAMES.USERS],
-      2: !!onboardingData[MODULE_NAMES.SPECIALTY],
-      3: !!onboardingData[MODULE_NAMES.DEPARTMENT],
-      4: !!onboardingData[MODULE_NAMES.PRODUCTS]
-    };
-
-    if (stepData[step]) {
-      return true;
+      return onboardingData[MODULE_NAMES.USERS] === true;
     }
 
-    if (step < currentStep) {
-      return true;
+    if (step === 2) {
+      return onboardingData[MODULE_NAMES.SPECIALTY] === true;
+    }
+
+    if (step === 3) {
+      return onboardingData[MODULE_NAMES.DEPARTMENT] === true;
+    }
+
+    if (step === 4) {
+      return onboardingData[MODULE_NAMES.PRODUCTS] === true;
     }
 
     return false;
   };
+
 
   //Handle Next Button
   const handleNext = () => {
@@ -544,42 +516,45 @@ function App() {
       }
     } catch (err) {
       console.error("Error in handleProceed:", err);
-      showMessage("An error occurred while completing onboarding.");
+      showError("An error occurred while completing onboarding.");
 
     }
   };
 
-
   // Handle Save Doctor
   const handleSaveDoctor = async () => {
+    setIsSavingDoctor(true);
+
+    let valid = true;
     // Reset previous errors
     setDoctorFirstNameError('');
     setDoctorLastNameError('');
     setDoctorEmailError('');
     setDoctorDepartmentError('');
 
-    // Validate input
-    let valid = true;
     const trimmedFirstName = doctorFirstName.trim();
     const trimmedLastName = doctorLastName.trim();
     const trimmedEmail = doctorEmail.trim();
 
     if (!trimmedFirstName) {
-      setDoctorFirstNameError('First name cannot be empty');
+      setDoctorFirstNameError('First Name cannot be empty');
       valid = false;
     }
 
     if (!trimmedLastName) {
-      setDoctorLastNameError('Last name cannot be empty');
+      setDoctorLastNameError('Last Name cannot be empty');
       valid = false;
     }
 
     if (!trimmedEmail) {
       setDoctorEmailError('Email cannot be empty');
       valid = false;
-    } else if (!/\S+@\S+\.\S+/.test(trimmedEmail)) {
-      setDoctorEmailError('Please enter a valid email address');
-      valid = false;
+    } else {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmedEmail)) {
+        setDoctorEmailError('Invalid email format');
+        valid = false;
+      }
     }
 
     if (!selectedDepartment) {
@@ -587,14 +562,15 @@ function App() {
       valid = false;
     }
 
-    if (!valid) return;
+    // If validation fails, stop here
+    if (!valid) {
+      setIsSavingDoctor(false);
+      return;
+    }
 
     try {
-      // Fetch profile and role data
-      const profileRoleData = await executeCRMFunction(FUNCTION.GET_PROFILESANDROLES, {});
-      const profiles = profileRoleData?.Profiles?.profiles || [];
-      const roles = profileRoleData?.Roles?.roles || [];
-      
+      // Use the pre-fetched profiles and roles from the state to avoid an API call
+      const { profiles, roles } = profilesAndRoles;
       const doctorProfile = profiles.find(p => p.name?.toLowerCase() === "doctor");
       const doctorRole = roles.find(r => r.name?.toLowerCase() === "doctor");
 
@@ -606,7 +582,6 @@ function App() {
         throw new Error("Doctor role not found. Please create a role named 'Doctor' in Zoho CRM.");
       }
 
-      // Prepare doctor data
       const doctorUser = {
         [FIELD_NAMES.FIRST_NAME]: trimmedFirstName,
         [FIELD_NAMES.LAST_NAME]: trimmedLastName,
@@ -616,62 +591,49 @@ function App() {
         [FIELD_NAMES.DEPARTMENT]: selectedDepartment.name
       };
 
-      // Save doctor record
       const insertResp = await ZOHO.CRM.API.insertRecord({
         Entity: MODULE_NAMES.USERS,
         APIData: doctorUser,
         trigger: undefined
       });
 
-      // Handle response
-      if (insertResp?.data?.[0]?.code === "SUCCESS" || 
-          (insertResp?.users?.[0]?.code === "SUCCESS")) {
-        
-        // Update state and reset form
+      if (insertResp?.data?.[0]?.code === "SUCCESS" || (insertResp?.users?.[0]?.code === "SUCCESS")) {
         setDoctorFirstName('');
         setDoctorLastName('');
         setDoctorEmail('');
         setSelectedDepartment(null);
         setShowDoctorsModal(false);
-        
+
+        // Update onboarding data and mark step 1 as completed.
         setOnboardingData(prev => ({
           ...prev,
-          [MODULE_NAMES.USERS]: {
-            role: doctorRole.name,
-            profile: doctorProfile.name
-          }
+          [MODULE_NAMES.USERS]: true
         }));
 
-        // Refresh data
-        await Promise.all([fetchDoctors(), fetchDepartmentOptions()]);
-        
-        // Show success message and proceed
-        const successMessage = 'Doctor added successfully';
-        showMessage(successMessage);
-        setShowSuccessBanner(true);
+        // Refresh doctors list to get the latest count of doctors
+        await fetchDoctors();
+        showMessage('Doctor added successfully!');
 
-        setTimeout(() => {
-          setShowSuccessBanner(false);
-          if (currentStep < 4) {
-            setCurrentStep(prevStep => prevStep + 1);
-          }
-        }, 1000);
+        if (currentStep === 1) {
+          setCurrentStep(2);
+        }
+
       } else {
-        // Handle API error response
-        const errorMessage = formatErrorMessage(insertResp) || 'Failed to add doctor';
-        console.error('Error saving doctor:', insertResp);
-        showMessage(errorMessage);
+        const errorMessage = insertResp?.data?.[0]?.message || insertResp?.users?.[0]?.message || 'Failed to add doctor';
+        showError(errorMessage);
+        console.error("API Response Error:", insertResp);
       }
     } catch (err) {
       console.error('Error in handleSaveDoctor:', err);
       const errorMessage = formatErrorMessage(err) || 'An error occurred while saving the doctor';
-      showMessage(errorMessage);
+      showWarning(errorMessage);
+    } finally {
+      setIsSavingDoctor(false);
     }
   };
 
   // Handle Save Specialty
   const handleSaveSpecialty = async () => {
-    // Reset previous errors
     setSpecialtyInputError('');
 
     // Validate input
@@ -679,7 +641,6 @@ function App() {
     if (!trimmedInput) {
       const errorMessage = 'Specialty name cannot be empty';
       setSpecialtyInputError(errorMessage);
-      showMessage(errorMessage);
       return;
     }
 
@@ -701,25 +662,19 @@ function App() {
         setSpecialtyInput('');
         setShowSpecialtyModal(false);
 
-        // Move to next step after delay
-        setTimeout(() => {
-          setShowSuccessBanner(false);
-          if (currentStep < 4) {
-            setCurrentStep(prevStep => prevStep + 1);
-          }
-        }, 1000);
+        if (currentStep === 2) {
+          setCurrentStep(3);
+        }
       } else {
-        // Handle API response error
-        const errorMessage = formatErrorMessage(response) || 'Failed to add specialty';
+        const errorMessage = response?.data?.[0]?.message || response?.users?.[0]?.message || 'Failed to add Specialty';
         setSpecialtyInputError(errorMessage);
-        showMessage(errorMessage);
+        showError(errorMessage);
       }
     } catch (err) {
-      // Handle any errors during the API call
       console.error('Error saving specialty:', err);
       const errorMessage = formatErrorMessage(err) || 'An error occurred while saving the specialty';
       setSpecialtyInputError(errorMessage);
-      showMessage(errorMessage);
+      showWarning(errorMessage);
     }
   };
 
@@ -808,8 +763,9 @@ function App() {
         }
       }
       if (response.data && response.data[0].code === "SUCCESS") {
-        showMessage("Department added successfully!");
-        setOnboardingData((prev) => ({ ...prev, Department: true }));
+        // Show success message and close modal
+        showMessage('Department added successfully!');
+        resetDepartmentModalFields();
         setShowDepartmentModal(false);
         setDepartmentInput("");
         setSelectedSpecialty("");
@@ -819,24 +775,27 @@ function App() {
         setDepartmentSpecialtyInputError("");
         setDoctorInputError("");
         setDurationInputError("");
-        setShowDepartmentModal(false);
+
+        // Mark department step as completed
+        setOnboardingData(prev => ({
+          ...prev,
+          [MODULE_NAMES.DEPARTMENT]: true
+        }));
+
         await fetchDoctors();
-        setTimeout(() => {
-          setShowSuccessBanner(false);
-          if (currentStep < 4) {
-            setCurrentStep(prevStep => prevStep + 1);
-          }
-        }, 1000);
+
+        if (currentStep === 3) {
+          setCurrentStep(4);
+        }
       } else {
-        const errorMessage = formatErrorMessage(response) || "Failed to add department";
-        console.log("API Error Response:", errorMessage);
-        showMessage(errorMessage);
+        const errorMessage = response?.data?.[0]?.message || response?.users?.[0]?.message || 'Failed to add Department';
+        console.error("API Error Response:", errorMessage);
+        showError(errorMessage);
       }
     } catch (err) {
       console.error("Error Saving Department:", err);
       const errorMessage = formatErrorMessage(err) || "Failed to save department";
-
-      showMessage(errorMessage);
+      showWarning(errorMessage);
     }
   };
 
@@ -882,34 +841,32 @@ function App() {
 
       if (response.data && response.data[0].code === "SUCCESS") {
         const successMessage = "Product added successfully";
-        showMessage(successMessage);
-
+        // Show success message for 4 seconds (4000ms) for products
+        showMessage(successMessage, 4000);
         setOnboardingData(prev => ({ ...prev, Products: true }));
+
+        // Clear errors first
+        setProductNameError('');
+        setProductTypeError('');
+        setUnitPriceError('');
         setShowProductsModal(false);
         setProductsInput('');
         setSelectedProductType('');
         setUnitPriceInput('');
-        setProductNameError('');
-        setProductTypeError('');
-        setUnitPriceError('');
 
-        // Hide success message and navigate to next step after a short delay
-        setTimeout(() => {
-          setShowSuccessBanner(false);
-          if (currentStep < 4) {
-            setCurrentStep(prevStep => prevStep + 1);
-          }
-        }, 1000);
+        // if (currentStep === 4) {
+        //   handleProceed();
+        // }
+
       } else {
-        // Handle API response error (non-200 status)
-        const errorMessage = formatErrorMessage(response);
-        console.error('API Error Response:', errorMessage);
-        showMessage(errorMessage);
+        const errorMessage = response?.data?.[0]?.message || response?.users?.[0]?.message || 'Failed to add Products';
+        showWarning(errorMessage);
+        console.error("API Response Error:", response);
       }
     } catch (err) {
       console.log('Error Inserting Record:', err);
-      const errorMessage = formatErrorMessage(err);
-      showMessage(errorMessage);
+      const errorMessage = formatErrorMessage(err) || 'An error occurred while saving the product';
+      showWarning(errorMessage);
     }
   };
 
@@ -936,11 +893,36 @@ function App() {
 
   return (
     <div className="main-container show">
-      {showSuccessBanner && (
-        <SuccessBanner
-          message={successMessage}
-          onClose={() => setShowSuccessBanner(false)}
-        />
+      {showBanner && (
+        <div className={`banner ${bannerType}-banner`}>
+          <div className='banner-icon'>
+            {bannerType === 'success' ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            ) : bannerType === 'error' ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+            )}
+          </div>
+          <span>{bannerMessage}</span>
+          <button
+            className="close-btn"
+            onClick={() => setShowBanner(false)}
+            aria-label="Close"
+            data-testid="close-banner"
+          >
+            &times;
+          </button>
+        </div>
       )}
 
       <div className="header-container">
@@ -1061,7 +1043,7 @@ function App() {
         <div
           id="Products"
           className={`container-card products ${currentStep === 4 ? '' : 'hidden'}`}
-          onClick={() => { setShowProductsModal(true); fetchProductTypeOptions(), setSelectedProductType("Fee") }}
+          onClick={() => { setShowProductsModal(true); setSelectedProductType("Fee") }}
         >
           <div className="card-layout">
             <div className="text-content">
@@ -1156,7 +1138,7 @@ function App() {
               </div>
               <div className='buttons'>
                 <button className="cancelbutton" onClick={() => { resetDoctorsModalFields(); setShowDoctorsModal(false); }}>Cancel</button>
-                <button className="addbuton" onClick={handleSaveDoctor}>Save</button>
+                <button className="addbuton" onClick={handleSaveDoctor} disabled={isSavingDoctor}> {isSavingDoctor ? "Saving..." : "Save"}</button>
               </div>
             </div>
           </div>
@@ -1327,47 +1309,19 @@ function App() {
             </div>
             <div className='fields'>
               <div className='fields-label'><label>Product Type</label></div>
-              <div className='fields-input-wrapper'>
-                <input type="text" value={selectedProductType} disabled className="product-modal-input"></input>
-
-                {/* <div ref={productTypeDropdownRef} className="custom-dropdown-wrapper" style={{ position: 'relative' }}>
-                  <div
-                    className={`custom-dropdown-selected${!selectedProductType || productTypeError ? ' error-border-left' : ''
-                      }${isProductTypeDropdownOpen ? ' open' : ''}`}
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (!isProductTypeDropdownOpen) {
-                        await fetchProductTypeOptions();
-                      }
-                      setIsProductTypeDropdownOpen(prev => !prev);
-                    }}
-                  >
-                    <span>
-                      {selectedProductType || 'Select Product Type'}
-                    </span>
-                    <svg className="dropdown-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                  </div>
-                  {isProductTypeDropdownOpen && (
-                    <CustomProductTypeDropdown
-                      inputRef={productTypeInputRef}
-                      dropdownRef={productTypeDropdownRef}
-                      options={productTypeOptions}
-                      selected={selectedProductType}
-                      setSelected={(value) => {
-                        setSelectedProductType(value);
-                        setIsProductTypeDropdownOpen(false);
-                        if (productTypeError) setProductTypeError('');
-                      }}
-                      searchTerm={productTypeSearchTerm}
-                      setSearchTerm={setProductTypeSearchTerm}
-                      closeDropdown={() => setIsProductTypeDropdownOpen(false)}
-                      openUpward={true}
-                      error={productTypeError}
-                    />
-                  )}
-                </div> */}
+              <div className='fields-input-wrapper locked-input-wrapper'>
+                <input
+                  type="text"
+                  value={selectedProductType}
+                  disabled
+                  className="product-modal-input"
+                  aria-label="Product Type (read-only)"
+                />
+                <span className="lock-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12.6667 7.33333H12V5.33333C12 3.12419 10.2091 1.33333 8 1.33333C5.79086 1.33333 4 3.12419 4 5.33333V7.33333H3.33333C2.59695 7.33333 2 7.93029 2 8.66667V13.3333C2 14.0697 2.59695 14.6667 3.33333 14.6667H12.6667C13.403 14.6667 14 14.0697 14 13.3333V8.66667C14 7.93029 13.403 7.33333 12.6667 7.33333ZM10.6667 7.33333H5.33333V5.33333C5.33333 3.86057 6.52724 2.66667 8 2.66667C9.47276 2.66667 10.6667 3.86057 10.6667 5.33333V7.33333Z" fill="#000" />
+                  </svg>
+                </span>
                 {productTypeError && <div className="field-error">{productTypeError}</div>}
               </div>
             </div>
